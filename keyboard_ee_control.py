@@ -19,7 +19,7 @@ from typing import Iterable
 import numpy as np
 from readchar import key, readkey
 
-from kinematics import RobotKinematics
+from lerobot.model.kinematics import RobotKinematics
 from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
 
