@@ -23,8 +23,8 @@ from lerobot.model.kinematics import RobotKinematics
 from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
 
-DEFAULT_PORT = "/dev/tty.usbmodem5B790316511"
-DEFAULT_ID = "my_so101"
+DEFAULT_PORT = "/dev/tty.usbmodem5A460838151"
+DEFAULT_ID = "scheda_nera"
 DEFAULT_URDF = Path("SO101/so101_new_calib.urdf")
 SO101_GITHUB_API = "https://api.github.com/repos/TheRobotStudio/SO-ARM100/contents/Simulation/SO101"
 

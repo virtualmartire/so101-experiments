@@ -16,8 +16,8 @@ from readchar import key, readkey
 from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
 
-DEFAULT_PORT = "/dev/tty.usbmodem5B790316511"
-DEFAULT_ID = "my_so101"
+DEFAULT_PORT = "/dev/tty.usbmodem5A460838151"
+DEFAULT_ID = "scheda_nera"
 
 # SO101 follower motor order (matches LeRobot SOFollower bus definition).
 JOINT_NAMES = [
