@@ -16,7 +16,7 @@ from readchar import key, readkey
 from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
 
-DEFAULT_PORT = "/dev/tty.usbmodem5A460838151"
+DEFAULT_PORT = "/dev/tty.usbmodem5B790316511"
 DEFAULT_ID = "scheda_nera"
 
 # SO101 follower motor order (matches LeRobot SOFollower bus definition).
@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--step-deg",
         type=float,
-        default=2.0,
+        default=4.0,
         help="Step size per keypress for body joints (degrees).",
     )
     parser.add_argument(
@@ -60,6 +60,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.05,
         help="Short delay after each command so the arm can start moving.",
+    )
+    parser.add_argument(
+        "--ramp-steps",
+        type=int,
+        default=4,
+        help="Number of smaller commands used to smooth each keypress. Use 1 to disable ramping.",
+    )
+    parser.add_argument(
+        "--ramp-s",
+        type=float,
+        default=0.12,
+        help="Total time spent ramping each keypress command.",
     )
     parser.add_argument(
         "--connect-without-calibration",
@@ -99,6 +111,7 @@ def print_controls(step_deg: float, step_gripper: float) -> None:
     print(f"  Up / Down, w / s  : move selected joint (+/- {step_deg}° or ±{step_gripper} gripper)")
     print("  + / -             : same as Up / Down")
     print("  p                 : print current joint positions")
+    print("  h                 : reset hold pose to current joint positions")
     print("  q or Esc          : quit")
     print()
 
@@ -140,6 +153,30 @@ def apply_delta(
     return max(min_deg, min(max_deg, goal))
 
 
+def send_ramped_action(
+    robot: SO101Follower,
+    start_action: dict[str, float],
+    target_action: dict[str, float],
+    steps: int,
+    duration_s: float,
+) -> dict[str, float]:
+    steps = max(1, steps)
+    delay_s = max(0.0, duration_s) / steps
+    sent_action: dict[str, float] = {}
+
+    for step in range(1, steps + 1):
+        ratio = step / steps
+        action = {
+            name: start_action[name] + (target_action[name] - start_action[name]) * ratio
+            for name in target_action
+        }
+        sent_action = robot.send_action(action)
+        if delay_s > 0 and step < steps:
+            time.sleep(delay_s)
+
+    return sent_action
+
+
 def main() -> int:
     args = parse_args()
 
@@ -164,6 +201,7 @@ def main() -> int:
     try:
         observation = robot.get_observation()
         positions = positions_from_observation(observation, motor_names)
+        hold_positions = positions.copy()
 
         print("Connected. One joint moves per keypress.")
         print("Keep one hand near power/USB disconnect while testing.")
@@ -180,6 +218,14 @@ def main() -> int:
             if ch in ("p", "P"):
                 observation = robot.get_observation()
                 positions = positions_from_observation(observation, motor_names)
+                print_status(selected, positions, motor_names, robot)
+                continue
+
+            if ch in ("h", "H"):
+                observation = robot.get_observation()
+                positions = positions_from_observation(observation, motor_names)
+                hold_positions = positions.copy()
+                print("Hold pose reset to current joint positions.")
                 print_status(selected, positions, motor_names, robot)
                 continue
 
@@ -212,21 +258,31 @@ def main() -> int:
             joint_name = motor_names[selected]
             key_name = f"{joint_name}.pos"
             present = positions[key_name]
-            goal = apply_delta(present, joint_name, direction, args.step_deg, args.step_gripper, robot)
+            start = hold_positions[key_name]
+            goal = apply_delta(start, joint_name, direction, args.step_deg, args.step_gripper, robot)
 
-            if abs(goal - present) < 1e-3:
+            if abs(goal - start) < 1e-3:
                 if joint_name != "gripper":
                     min_deg, max_deg = joint_degree_limits(robot, joint_name)
                     print(
-                        f"{joint_name} already at limit ({present:+.1f}°, "
+                        f"{joint_name} already at limit ({start:+.1f}°, "
                         f"range [{min_deg:+.1f}, {max_deg:+.1f}]). "
                         "Move the other direction or recalibrate."
                     )
                 continue
 
-            # Only command the selected joint so other joints are not disturbed.
-            sent_action = robot.send_action({key_name: goal})
+            start_action = hold_positions.copy()
+            target_action = hold_positions.copy()
+            target_action[key_name] = goal
+            sent_action = send_ramped_action(
+                robot,
+                start_action,
+                target_action,
+                args.ramp_steps,
+                args.ramp_s,
+            )
             sent_goal = float(sent_action[key_name])
+            hold_positions[key_name] = sent_goal
             time.sleep(args.settle_s)
 
             observation = robot.get_observation()
