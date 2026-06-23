@@ -47,7 +47,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not auto-download the SO101 URDF/assets when --urdf-path is missing.",
     )
-    parser.add_argument("--step-m", type=float, default=0.005, help="Cartesian step per keypress, in meters.")
+    parser.add_argument(
+        "--step-m",
+        type=float,
+        default=0.005,
+        help="Cartesian step per keypress, in meters."
+    )
     parser.add_argument(
         "--control-frame",
         choices=tuple(CONTROL_FRAME_DESCRIPTIONS),
@@ -57,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-distance-m",
         type=float,
-        default=0.20,
+        default=0.0,
         help="Maximum distance from the startup end-effector position. Use 0 to disable.",
     )
     parser.add_argument(
@@ -81,13 +86,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ramp-steps",
         type=int,
-        default=4,
+        default=6,
         help="Number of smaller commands used to smooth each keypress. Use 1 to disable ramping.",
     )
     parser.add_argument(
         "--ramp-s",
         type=float,
-        default=0.12,
+        default=0.2,
         help="Total time spent ramping each keypress command.",
     )
     parser.add_argument(
