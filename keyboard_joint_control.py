@@ -7,17 +7,21 @@ degrees; the gripper moves on a 0–100 scale (closed to open).
 
 from __future__ import annotations
 
+import dotenv
+dotenv.load_dotenv("./.env")
+
 import argparse
 import sys
 import time
+import os
 
 from readchar import key, readkey
 
 from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
 
-DEFAULT_PORT = "/dev/tty.usbmodem5B790316511"
-DEFAULT_ID = "scheda_nera"
+PORT = os.getenv("PORT")
+ROBOT_ID = os.getenv("ROBOT_ID")
 
 # SO101 follower motor order (matches LeRobot SOFollower bus definition).
 JOINT_NAMES = [
@@ -35,8 +39,8 @@ def parse_args() -> argparse.Namespace:
         description="Move each SO101 joint individually with the keyboard.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--port", default=DEFAULT_PORT, help="SO101 follower serial port.")
-    parser.add_argument("--id", default=DEFAULT_ID, help="LeRobot robot id used for calibration files.")
+    parser.add_argument("--port", default=PORT, help="SO101 follower serial port.")
+    parser.add_argument("--id", default=ROBOT_ID, help="LeRobot robot id used for calibration files.")
     parser.add_argument(
         "--step-deg",
         type=float,

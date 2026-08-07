@@ -8,6 +8,9 @@ sends those joint targets to the motors.
 
 from __future__ import annotations
 
+import dotenv
+dotenv.load_dotenv("./.env")
+
 import argparse
 import json
 import sys
@@ -15,6 +18,7 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import Iterable
+import os
 
 import numpy as np
 from readchar import key, readkey
@@ -22,9 +26,9 @@ from readchar import key, readkey
 from lerobot.model.kinematics import RobotKinematics
 from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
+PORT = os.getenv("PORT")
+ROBOT_ID = os.getenv("ROBOT_ID")
 
-DEFAULT_PORT = "/dev/tty.usbmodem5B790316511"
-DEFAULT_ID = "scheda_nera"
 DEFAULT_URDF = Path("SO101/so101_new_calib.urdf")
 SO101_GITHUB_API = "https://api.github.com/repos/TheRobotStudio/SO-ARM100/contents/Simulation/SO101"
 CONTROL_FRAME_DESCRIPTIONS = {
@@ -39,8 +43,8 @@ def parse_args() -> argparse.Namespace:
         description="Move an SO101 end effector with keyboard arrows.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--port", default=DEFAULT_PORT, help="SO101 follower serial port.")
-    parser.add_argument("--id", default=DEFAULT_ID, help="LeRobot robot id used for calibration files.")
+    parser.add_argument("--port", default=PORT, help="SO101 follower serial port.")
+    parser.add_argument("--id", default=ROBOT_ID, help="LeRobot robot id used for calibration files.")
     parser.add_argument("--urdf-path", type=Path, default=DEFAULT_URDF, help="Path to SO101 URDF.")
     parser.add_argument(
         "--no-download-urdf",
