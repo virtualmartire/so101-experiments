@@ -58,6 +58,12 @@ def parse_args() -> argparse.Namespace:
         help="Cartesian step per keypress, in meters."
     )
     parser.add_argument(
+        "--step-gripper",
+        type=float,
+        default=5.0,
+        help="Gripper step per keypress (0=closed, 100=open).",
+    )
+    parser.add_argument(
         "--control-frame",
         choices=tuple(CONTROL_FRAME_DESCRIPTIONS),
         default="base",
@@ -250,14 +256,15 @@ def send_ramped_action(
     return sent_action
 
 
-def print_controls(step_m: float, control_frame: str) -> None:
+def print_controls(step_m: float, step_gripper: float, control_frame: str) -> None:
     print()
     print("Controls")
     print(f"  Control frame     : {control_frame} ({CONTROL_FRAME_DESCRIPTIONS[control_frame]})")
     print(f"  Arrow up/down     : move end effector +X/-X by {step_m * 1000:.1f} mm in that frame")
     print(f"  Arrow left/right  : move end effector +Y/-Y by {step_m * 1000:.1f} mm in that frame")
     print(f"  w / s             : move end effector +Z/-Z by {step_m * 1000:.1f} mm in that frame")
-    print("  p                 : print current and desired end-effector frames")
+    print(f"  o / p             : open / close gripper by {step_gripper:.1f} (0=closed, 100=open)")
+    print("  i                 : print current and desired end-effector frames")
     print("  h                 : reset hold pose/workspace center to current pose")
     print("  q or Esc          : quit")
     print()
@@ -277,6 +284,18 @@ def key_to_delta(ch: str, step_m: float) -> np.ndarray | None:
     if ch in ("s", "S"):
         return np.array([0.0, 0.0, -step_m], dtype=float)
     return None
+
+
+def gripper_delta_from_key(ch: str, step_gripper: float) -> float | None:
+    if ch in ("o", "O"):
+        return step_gripper
+    if ch in ("p", "P"):
+        return -step_gripper
+    return None
+
+
+def clamp_gripper(value: float) -> float:
+    return max(0.0, min(100.0, value))
 
 
 def main() -> int:
@@ -310,8 +329,10 @@ def main() -> int:
         print("Connected. The arm will move one small step for each keypress.")
         print("Keep one hand near power/USB disconnect while testing.")
         input("Press ENTER when the workspace is clear and you are ready...")
-        print_controls(args.step_m, args.control_frame)
+        print_controls(args.step_m, args.step_gripper, args.control_frame)
         print_pose("Start pose", start_pose)
+
+        gripper_key = "gripper.pos"
 
         while True:
             ch = readkey()
@@ -331,7 +352,7 @@ def main() -> int:
                 print_pose("Reset pose", start_pose)
                 continue
 
-            if ch in ("p", "P"):
+            if ch in ("i", "I"):
                 observation = robot.get_observation()
                 current_positions = motor_positions_from_observation(observation, motor_names)
                 q_current = positions_array(current_positions, kinematics.joint_names)
@@ -340,6 +361,41 @@ def main() -> int:
                 desired_pose = kinematics.forward_kinematics(q_desired)
                 print_pose("Current measured pose", current_pose)
                 print_pose("Desired hold pose", desired_pose)
+                if gripper_key in desired_positions:
+                    print(f"  gripper={desired_positions[gripper_key]:.1f} (0=closed, 100=open)")
+                continue
+
+            gripper_step = gripper_delta_from_key(ch, args.step_gripper)
+            if gripper_step is not None:
+                if gripper_key not in desired_positions:
+                    print("Gripper motor not available on this robot.")
+                    continue
+
+                start_value = desired_positions[gripper_key]
+                goal_value = clamp_gripper(start_value + gripper_step)
+                if abs(goal_value - start_value) < 1e-3:
+                    continue
+
+                start_action = desired_positions.copy()
+                target_action = desired_positions.copy()
+                target_action[gripper_key] = goal_value
+                sent_action = send_ramped_action(
+                    robot,
+                    start_action,
+                    target_action,
+                    args.ramp_steps,
+                    args.ramp_s,
+                )
+                for action_key, value in sent_action.items():
+                    desired_positions[action_key] = float(value)
+
+                time.sleep(args.settle_s)
+                observation = robot.get_observation()
+                actual_gripper = float(observation[gripper_key])
+                print(
+                    f"gripper {start_value:.1f} -> {actual_gripper:.1f} "
+                    f"(sent {desired_positions[gripper_key]:.1f})"
+                )
                 continue
 
             delta = key_to_delta(ch, args.step_m)
