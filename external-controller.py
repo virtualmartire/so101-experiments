@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Move an SO101 end effector with commands from a local process.
 
-Commands are UTF-8 lines sent to 127.0.0.1:8765. "left" and "right" move
-the arm, while "rest" leaves it at its current target. Each command receives
-an "ok" response when processed, or an "error" response when unsupported.
+Commands are UTF-8 lines sent to 127.0.0.1:8765. "left" and "right" start
+continuous steps, while "rest" stops further steps. Commands receive an "ok"
+response when accepted, or an "error" response when unsupported.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
+import select
 import socket
 import sys
 import time
@@ -26,6 +26,7 @@ from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
 COMMAND_HOST = "127.0.0.1"
 DEFAULT_COMMAND_PORT = 8765
+REST_POLL_S = 0.05
 SUPPORTED_COMMANDS = ("left", "right", "rest")
 
 
@@ -38,7 +39,11 @@ def parseArgs() -> argparse.Namespace:
     parser.add_argument("--id", default=ee.ROBOT_ID, help="LeRobot robot id used for calibration files.")
     parser.add_argument("--urdf-path", type=Path, default=ee.DEFAULT_URDF, help="Path to SO101 URDF.")
     parser.add_argument("--command-port", type=int, default=DEFAULT_COMMAND_PORT, help="Local TCP command port.")
-    parser.add_argument("--step-m", type=float, default=0.005, help="Cartesian step per command, in meters.")
+    parser.add_argument("--step-m", type=float, default=0.005, help="Cartesian step per repeated movement.")
+    parser.add_argument(
+        "--command-timeout-s", type=float, default=0.0,
+        help="Stop moving this many seconds after the last command. Use 0 to disable.",
+    )
     parser.add_argument(
         "--control-frame", choices=tuple(ee.CONTROL_FRAME_DESCRIPTIONS), default="base",
         help="Coordinate frame used for Cartesian steps.",
@@ -52,9 +57,9 @@ def parseArgs() -> argparse.Namespace:
         help="Safety clip for each joint command relative to the current position.",
     )
     parser.add_argument("--orientation-weight", type=float, default=0.01, help="IK orientation weight.")
-    parser.add_argument("--settle-s", type=float, default=0.05, help="Delay after each command.")
-    parser.add_argument("--ramp-steps", type=int, default=6, help="Ramped commands per external command.")
-    parser.add_argument("--ramp-s", type=float, default=0.2, help="Total ramp time per external command.")
+    parser.add_argument("--settle-s", type=float, default=0.05, help="Delay after each movement step.")
+    parser.add_argument("--ramp-steps", type=int, default=6, help="Ramped motor commands per movement step.")
+    parser.add_argument("--ramp-s", type=float, default=0.2, help="Total ramp time per movement step.")
     parser.add_argument(
         "--no-download-urdf", action="store_true",
         help="Do not auto-download URDF/assets when --urdf-path is missing.",
@@ -145,13 +150,20 @@ class EndEffectorController:
         )
 
 
-def processCommand(controller: EndEffectorController, command: str) -> str:
+def createCommandResponse(command: str) -> str:
     if command not in SUPPORTED_COMMANDS:
         return f"error: expected 'left', 'right', or 'rest', received {command!r}\n"
-    if command == "rest":
-        return "ok\n"
-    controller.move(command)
     return "ok\n"
+
+
+def hasCommandTimedOut(
+    active_command: str,
+    last_command_time: float,
+    command_timeout_s: float,
+) -> bool:
+    if active_command == "rest" or command_timeout_s <= 0:
+        return False
+    return time.monotonic() - last_command_time >= command_timeout_s
 
 
 def sendResponse(connection: socket.socket, response: str) -> bool:
@@ -162,17 +174,56 @@ def sendResponse(connection: socket.socket, response: str) -> bool:
     return True
 
 
+def receiveCommands(
+    connection: socket.socket,
+    pending_data: bytes,
+    poll_s: float,
+) -> tuple[list[str], bytes, bool]:
+    readable, _, _ = select.select([connection], [], [], poll_s)
+    if not readable:
+        return [], pending_data, True
+    try:
+        incoming_data = connection.recv(4096)
+    except (BrokenPipeError, ConnectionResetError):
+        return [], pending_data, False
+    if not incoming_data:
+        return [], pending_data, False
+    complete_data = pending_data + incoming_data
+    *command_lines, pending_data = complete_data.split(b"\n")
+    commands = [line.decode("utf-8").strip().lower() for line in command_lines]
+    return commands, pending_data, True
+
+
 def processConnection(controller: EndEffectorController, connection: socket.socket) -> None:
-    with connection.makefile("r", encoding="utf-8") as command_stream:
-        for raw_command in command_stream:
-            command = raw_command.strip().lower()
+    active_command = "rest"
+    pending_data = b""
+    connected = True
+    last_command_time = time.monotonic()
+    while connected:
+        poll_s = REST_POLL_S if active_command == "rest" else 0.0
+        commands, pending_data, connected = receiveCommands(connection, pending_data, poll_s)
+        for command in commands:
             if not command:
                 continue
             print(f"Received {command!r}", flush=True)
-            response = processCommand(controller, command)
+            response = createCommandResponse(command)
+            if command in SUPPORTED_COMMANDS:
+                active_command = command
+                last_command_time = time.monotonic()
             if not sendResponse(connection, response):
                 print("External process disconnected before the response was sent.", flush=True)
+                connected = False
                 break
+        if not connected:
+            break
+        if hasCommandTimedOut(active_command, last_command_time, controller.args.command_timeout_s):
+            print("Command timed out; stopping movement.", flush=True)
+            active_command = "rest"
+        if active_command == "rest":
+            continue
+        controller.move(active_command)
+    if not connected:
+        print("External process disconnected; arm returned to rest.", flush=True)
 
 
 def printControls(args: argparse.Namespace) -> None:
@@ -181,8 +232,9 @@ def printControls(args: argparse.Namespace) -> None:
     print(f"  Listening on  : {COMMAND_HOST}:{args.command_port} (local processes only)")
     print("  Protocol      : one UTF-8 command per line; one response per command")
     print(f"  Control frame : {args.control_frame}")
-    print(f"  left / right  : +Y / -Y by {args.step_m * 1000:.1f} mm in that frame")
-    print("  rest          : do not issue a new movement")
+    print(f"  left / right  : continuously step +Y / -Y by {args.step_m * 1000:.1f} mm")
+    print("  rest          : stop issuing new movement steps")
+    print(f"  Command timeout: {args.command_timeout_s} s (0 disables)")
     print("  Ctrl+C        : disconnect and quit")
     print()
 
@@ -199,7 +251,7 @@ def serveCommands(controller: EndEffectorController) -> None:
 
 def runController(robot: SO101Follower, kinematics: ee.RobotKinematics, args: argparse.Namespace) -> None:
     controller = EndEffectorController(robot, kinematics, args)
-    print("Connected. The arm will move one small step for each external command.")
+    print("Connected. left/right will repeat movement steps until rest or disconnect.")
     print("Keep one hand near power/USB disconnect while testing.")
     input("Press ENTER when the workspace is clear and you are ready...")
     printControls(args)
