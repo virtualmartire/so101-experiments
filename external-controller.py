@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Move an SO101 end effector with left/right commands from a local process.
+"""Move an SO101 end effector with commands from a local process.
 
-Commands are UTF-8 lines sent to 127.0.0.1:8765. Each command receives an
-"ok" response after moving, or an "error" response when it is unsupported.
+Commands are UTF-8 lines sent to 127.0.0.1:8765. "left" and "right" move
+the arm, while "rest" leaves it at its current target. Each command receives
+an "ok" response when processed, or an "error" response when unsupported.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
 COMMAND_HOST = "127.0.0.1"
 DEFAULT_COMMAND_PORT = 8765
-SUPPORTED_COMMANDS = ("left", "right")
+SUPPORTED_COMMANDS = ("left", "right", "rest")
 
 
 def parseArgs() -> argparse.Namespace:
@@ -146,7 +147,9 @@ class EndEffectorController:
 
 def processCommand(controller: EndEffectorController, command: str) -> str:
     if command not in SUPPORTED_COMMANDS:
-        return f"error: expected 'left' or 'right', received {command!r}\n"
+        return f"error: expected 'left', 'right', or 'rest', received {command!r}\n"
+    if command == "rest":
+        return "ok\n"
     controller.move(command)
     return "ok\n"
 
@@ -179,6 +182,7 @@ def printControls(args: argparse.Namespace) -> None:
     print("  Protocol      : one UTF-8 command per line; one response per command")
     print(f"  Control frame : {args.control_frame}")
     print(f"  left / right  : +Y / -Y by {args.step_m * 1000:.1f} mm in that frame")
+    print("  rest          : do not issue a new movement")
     print("  Ctrl+C        : disconnect and quit")
     print()
 
